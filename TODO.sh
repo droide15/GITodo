@@ -1,4 +1,6 @@
 #!/bin/bash
+trap "echo program aborted;exit 1" TERM
+export TOP_PID=$$
 
 printUsage() {
     echo ""
@@ -21,8 +23,29 @@ printUsage() {
     echo ""
 }
 
+safeEval() {
+    unset t_std t_err t_ret
+    eval "$( eval $1 \
+      2> >(t_err=$(cat); typeset -p t_err) \
+      > >(t_std=$(cat); typeset -p t_std); t_ret=$?; typeset -p t_ret )"
+    if ! [[ -z $t_std ]]; then
+        echo $t_std >&2
+    fi
+    if ! [[ -z $t_err ]]; then
+        echo $t_err >&2
+    fi
+    if [[ $# = 1 ]]; then
+        echo $t_std
+        if [[ $t_ret -ne 0 ]]; then
+            kill -s TERM $TOP_PID
+        fi
+    elif [[ $2 = --bool ]]; then
+        echo $t_ret
+    fi
+}
+
 validateExist() {
-    local branch_exists=$(git branch --list TODOs)
+    local branch_exists=$(safeEval "git branch --list TODOs")
     if [[ -z ${branch_exists} ]]; then
         echo 1
     else
@@ -31,112 +54,146 @@ validateExist() {
 }
 
 checkCurrent() {
-    local current_branch=$(git branch --show-current)
+    local current_branch=$(safeEval "git branch --show-current")
     if [[ $current_branch != $1 ]]; then
-        git checkout $1 > /dev/null 2>&1
-        echo $?
+        echo $(safeEval "git checkout $1" --bool)
     else
         echo 0
     fi
 }
 
-case "$1" in
-    -e|--enter)
-            previous_branch=$(git branch --show-current)
-            if [[ $(validateExist) -eq 1 ]]; then
-                echo "TODOs branch does not exist yet." >&2
-                echo "Create TODOs branch with TODO -o or TODO --open."
+if [[ $# = 1 ]]; then
+    case "$1" in
+        -o|--open)
+                previous_branch=$(git branch --show-current)
+                if [[ $(validateExist) -eq 0 ]]; then
+                    echo "TODOs branch already exists." >&2
+                    exit 1
+                fi
+                if [[ $(checkCurrent develop) -eq 0 ]]; then
+                    safeEval "git checkout -b TODOs"
+                    if [[ $(safeEval "git push --set-upstream origin TODOs" --bool) -ne 0 ]]; then
+                        checkCurrent ${previous_branch}
+                        safeEval "git branch -d TODOs"
+                        exit 1
+                    fi
+                else
+                    exit 1
+                fi
+                checkCurrent ${previous_branch}
+                exit 0
+                ;;
+        -p|--publish)
+                previous_branch=$(git branch --show-current)
+                if [[ $(validateExist) -eq 1 ]]; then
+                    echo "TODOs branch does not exist yet." >&2
+                    echo "Create TODOs branch with TODO -o or TODO --open."
+                    exit 1
+                fi
+                if [[ $(checkCurrent TODOs) -eq 0 ]]; then
+                    if [[ $(safeEval "git push --force" -bool) -ne 0 ]]; then
+                        checkCurrent ${previous_branch}
+                        exit 1
+                    fi
+                else
+                    exit 1
+                fi
+                checkCurrent ${previous_branch}
+                exit 0
+                ;;
+        -l|--list)
+                if [[ $(validateExist) -eq 1 ]]; then
+                    echo "TODOs branch does not exist yet." >&2
+                    echo "Create TODOs branch with TODO -o or TODO --open."
+                    exit 1
+                fi
+                git log TODOs --pretty=format:"%cr %h %s"|less
+                exit 0
+                ;;
+        -h|--help)
+                echo ""
+                echo "TODO is a utility made for Git to commit todo messages in a branch called TODOs which is based on the branch develop."
+                printUsage
+                exit 0
+                ;;
+        *)
+                echo ""
+                echo "Invalid option $@." >&2
+                printUsage
                 exit 1
-            fi
-            if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                git commit --allow-empty -m "TODO: $2"
-            else
-                exit 1
-            fi
+                ;;
+    esac
+elif [[ $# = 2 ]]; then
+    case "$1" in
+        -e|--enter)
+                previous_branch=$(git branch --show-current)
+                if [[ $(validateExist) -eq 1 ]]; then
+                    echo "TODOs branch does not exist yet." >&2
+                    echo "Create TODOs branch with TODO -o or TODO --open."
+                    exit 1
+                fi
+                if [[ $(checkCurrent TODOs) -eq 0 ]]; then
+                    if [[ $(safeEval "git commit --allow-empty -m \"TODO: $2\"" -bool) -ne 0 ]]; then
+                        checkCurrent ${previous_branch}
+                        safeEval "git merge --abort"
+                        exit 1
+                    fi
+                else
+                    exit 1
+                fi
 
-            checkCurrent ${previous_branch}
-            exit 0
-            ;;
-    -o|--open)
-            previous_branch=$(git branch --show-current)
-            if [[ $(validateExist) -eq 0 ]]; then
-                echo "TODOs branch already exists." >&2
+                checkCurrent ${previous_branch}
+                exit 0
+                ;;
+        -s|--sync)
+                previous_branch=$(git branch --show-current)
+                if [[ $(validateExist) -eq 1 ]]; then
+                    echo "TODOs branch does not exist yet." >&2
+                    echo "Create TODOs branch with TODO -o or TODO --open."
+                    exit 1
+                fi
+                if [[ $(checkCurrent TODOs) -eq 0 ]]; then
+                    safeEval "git merge --squash develop"
+                    if [[ $(safeEval "git commit -m \"$2\"" -bool) -ne 0 ]]; then
+                        checkCurrent ${previous_branch}
+                        safeEval "git merge --abort"
+                        exit 1
+                    fi
+                else
+                    exit 1
+                fi
+                checkCurrent ${previous_branch}
+                exit 0
+                ;;
+        -c|--complete)
+                previous_branch=$(git branch --show-current)
+                if [[ $(validateExist) -eq 1 ]]; then
+                    echo "TODOs branch does not exist yet." >&2
+                    echo "Create TODOs branch with TODO -o or TODO --open."
+                    exit 1
+                fi
+                if [[ $(checkCurrent TODOs) -eq 0 ]]; then
+                    if [[ $(safeEval "git rebase -r --onto $2^ $2" -bool) -ne 0 ]]; then
+                        checkCurrent ${previous_branch}
+                        safeEval "git merge --abort"
+                        exit 1
+                    fi
+                else
+                    exit 1
+                fi
+                checkCurrent ${previous_branch}
+                exit 0
+                ;;
+        *)
+                echo ""
+                echo "Invalid options $@." >&2
+                printUsage
                 exit 1
-            fi
-            if [[ $(checkCurrent develop) -eq 0 ]]; then
-                git checkout -b TODOs
-                git push --set-upstream origin TODOs
-            else
-                exit 1
-            fi
-            checkCurrent ${previous_branch}
-            exit 0
-            ;;
-    -s|--sync)
-            previous_branch=$(git branch --show-current)
-            if [[ $(validateExist) -eq 1 ]]; then
-                echo "TODOs branch does not exist yet." >&2
-                echo "Create TODOs branch with TODO -o or TODO --open."
-                exit 1
-            fi
-            if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                git merge --squash develop
-                git commit -m "$2"
-            else
-                exit 1
-            fi
-            checkCurrent ${previous_branch}
-            exit 0
-            ;;
-    -p|--publish)
-            previous_branch=$(git branch --show-current)
-            if [[ $(validateExist) -eq 1 ]]; then
-                echo "TODOs branch does not exist yet." >&2
-                echo "Create TODOs branch with TODO -o or TODO --open."
-                exit 1
-            fi
-            if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                git push --force
-            else
-                exit 1
-            fi
-            checkCurrent ${previous_branch}
-            exit 0
-            ;;
-    -l|--list)
-            if [[ $(validateExist) -eq 1 ]]; then
-                echo "TODOs branch does not exist yet." >&2
-                echo "Create TODOs branch with TODO -o or TODO --open."
-                exit 1
-            fi
-            git log TODOs --pretty=format:"%cr %h %s"|less
-            exit 0
-            ;;
-    -c|--complete)
-            previous_branch=$(git branch --show-current)
-            if [[ $(validateExist) -eq 1 ]]; then
-                echo "TODOs branch does not exist yet." >&2
-                echo "Create TODOs branch with TODO -o or TODO --open."
-                exit 1
-            fi
-            if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                git rebase -r --onto $2^ $2
-            else
-                exit 1
-            fi
-            checkCurrent ${previous_branch}
-            exit 0
-            ;;
-    -h|--help)
-            echo ""
-            echo "TODO is a utility made for Git to commit todo messages in a branch called TODOs which is based on the branch develop."
-            printUsage
-            exit 0
-            ;;
-    *)
-            echo ""
-            echo "Invalid option $@." >&2
-            printUsage
-            exit 1
-            ;;
-esac
+                ;;
+    esac
+else
+    echo ""
+    echo "Invalid options $@." >&2
+    printUsage
+    exit 1
+fi
