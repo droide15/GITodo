@@ -156,7 +156,7 @@ elif [[ $# = 2 ]]; then
                     exit 1
                 fi
                 if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                    safeEval "git merge --squash develop"
+                    safeEval "git merge -X theirs --squash develop"
                     if [[ $(safeEval "git commit -m \"$2\"" RETVAL) -ne 0 ]]; then
                         checkCurrent ${previous_branch}
                         safeEval "git merge --abort"
