@@ -2,6 +2,9 @@
 trap "echo program aborted;exit 1" TERM
 export TOP_PID=$$
 
+readonly RETVAL=0
+readonly STDVAL=1
+
 printUsage() {
     echo ""
     echo "Usage:"
@@ -34,12 +37,12 @@ safeEval() {
     if ! [[ -z $t_err ]]; then
         echo $t_err >&2
     fi
-    if [[ $# = 1 ]]; then
+    if [[ $# -eq 1 || $2 = STDVAL ]]; then
         echo $t_std
         if [[ $t_ret -ne 0 ]]; then
             kill -s TERM $TOP_PID
         fi
-    elif [[ $2 = --bool ]]; then
+    elif [[ $2 = RETVAL ]]; then
         echo $t_ret
     fi
 }
@@ -56,7 +59,7 @@ validateExist() {
 checkCurrent() {
     local current_branch=$(safeEval "git branch --show-current")
     if [[ $current_branch != $1 ]]; then
-        echo $(safeEval "git checkout $1" --bool)
+        echo $(safeEval "git checkout $1" RETVAL)
     else
         echo 0
     fi
@@ -72,7 +75,7 @@ if [[ $# = 1 ]]; then
                 fi
                 if [[ $(checkCurrent develop) -eq 0 ]]; then
                     safeEval "git checkout -b TODOs"
-                    if [[ $(safeEval "git push --set-upstream origin TODOs" --bool) -ne 0 ]]; then
+                    if [[ $(safeEval "git push --set-upstream origin TODOs" RETVAL) -ne 0 ]]; then
                         checkCurrent ${previous_branch}
                         safeEval "git branch -d TODOs"
                         exit 1
@@ -91,7 +94,7 @@ if [[ $# = 1 ]]; then
                     exit 1
                 fi
                 if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                    if [[ $(safeEval "git push --force" -bool) -ne 0 ]]; then
+                    if [[ $(safeEval "git push --force" RETVAL) -ne 0 ]]; then
                         checkCurrent ${previous_branch}
                         exit 1
                     fi
@@ -133,7 +136,7 @@ elif [[ $# = 2 ]]; then
                     exit 1
                 fi
                 if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                    if [[ $(safeEval "git commit --allow-empty -m \"TODO: $2\"" -bool) -ne 0 ]]; then
+                    if [[ $(safeEval "git commit --allow-empty -m \"TODO: $2\"" RETVAL) -ne 0 ]]; then
                         checkCurrent ${previous_branch}
                         safeEval "git merge --abort"
                         exit 1
@@ -153,8 +156,8 @@ elif [[ $# = 2 ]]; then
                     exit 1
                 fi
                 if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                    safeEval "git merge --squash develop"
-                    if [[ $(safeEval "git commit -m \"$2\"" -bool) -ne 0 ]]; then
+                    safeEval "git merge -X theirs --squash develop"
+                    if [[ $(safeEval "git commit -m \"$2\"" RETVAL) -ne 0 ]]; then
                         checkCurrent ${previous_branch}
                         safeEval "git merge --abort"
                         exit 1
@@ -173,7 +176,7 @@ elif [[ $# = 2 ]]; then
                     exit 1
                 fi
                 if [[ $(checkCurrent TODOs) -eq 0 ]]; then
-                    if [[ $(safeEval "git rebase -r --onto $2^ $2" -bool) -ne 0 ]]; then
+                    if [[ $(safeEval "git rebase -r --onto $2^ $2" RETVAL) -ne 0 ]]; then
                         checkCurrent ${previous_branch}
                         safeEval "git merge --abort"
                         exit 1
